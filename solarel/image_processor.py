@@ -495,6 +495,6 @@ if __name__ == '__main__':
 
     start = time.time()
     main(model_path=model_path, folder_paths=folders,
-         toml_path=toml_path, show=False)
+         toml_path=toml_path, show=True)
     end = time.time()
     print(end - start)
