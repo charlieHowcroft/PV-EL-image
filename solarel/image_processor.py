@@ -16,23 +16,31 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
     model.compile()
 
     image = random_image(folder_paths)
+    # # test rotation, comment distortion fix
+    image = cv2.imread("rotated.jpg")
     if image is None:
         return
     if show:
         plt.imshow(image)
         plt.title('Raw Image')
         plt.show()
-    image = fix_barrel_distortion(image, toml_path)
+    # image = fix_barrel_distortion(image, toml_path)
     if show:
         plt.imshow(image)
         plt.title('Barrel distortion fix')
         plt.show()
     image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    cropped_image = find_pv_module(image)
+    cropped_image = find_pv_module(image, show=True)
     if show:
-        plt.imshow(cropped_image)
+        cropped_image_bgr = np.copy(cropped_image)
+        # cropped_image_bgr = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
+        print(cropped_image_bgr.shape)
+        # cv2.imwrite("cropped_image_bgr.jpg", cropped_image_bgr)
+        plt.imshow(cropped_image_bgr)
         plt.title('Cropped image to PV module')
+        plt.xticks([])
+        plt.yticks([])
         plt.show()
 
     cropped_cp = np.copy(cropped_image)
@@ -44,7 +52,8 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
 
     row_images = split_image_into_rows(cropped_cp, vert_splits, (512, 512))
     if show:
-        plt.imshow(row_images[1]["image"])
+        plt.imshow(row_images[0]["image"])
+        # cv2.imwrite("row.jpg", row_images[0]["image"])
         plt.title("First row")
         plt.show()
 
@@ -53,6 +62,9 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
         images.append(split_row_image(row, horz_splits+1, (512, 512)))
     if show:
         plt.imshow(images[0][0]["image"])
+        # cv2.imwrite("image_0.jpg", images[0][0]["image"])
+        # cv2.imwrite("image_1.jpg", images[0][1]["image"])
+        # cv2.imwrite("image_2.jpg", images[0][2]["image"])
         plt.title("First image from the row")
         plt.show()
 
@@ -68,6 +80,9 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
             image["image"] = predicted_img
     if show:
         plt.imshow(images[0][0]["image"])
+        # cv2.imwrite("mask_0.jpg", images[0][0]["image"])
+        # cv2.imwrite("mask_1.jpg", images[0][1]["image"])
+        # cv2.imwrite("mask_2.jpg", images[0][2]["image"])
         plt.title("First prediction from the first row")
         plt.show()
 
@@ -80,11 +95,22 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
             new = place_image(blank, temp, (y, x))
             masks.append(new)
 
+    if show:
+        # cv2.imwrite("mask_full_0.jpg", masks[0])
+        # cv2.imwrite("mask_full_1.jpg", masks[1])
+        # cv2.imwrite("mask_full_2.jpg", masks[2])
+        plt.imshow(masks[0])
+        plt.title("All mask predictions combined")
+        plt.show()
+
     final_mask = np.zeros((og_height, og_width))
-    for mask in masks:
+    for i, mask in enumerate(masks):
         final_mask = cv2.bitwise_or(final_mask, mask)
+        if i < 3 and show:
+            # cv2.imwrite(f"final_mask_{i}.jpg", final_mask)
     if show:
         plt.imshow(final_mask)
+        # cv2.imwrite("final_mask_.jpg", final_mask)
         plt.title("All mask predictions combined")
         plt.show()
 
@@ -95,6 +121,7 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
     edges = cv2.pyrDown(edges)
     if show:
         plt.imshow(edges)
+        # cv2.imwrite("edges.jpg", edges)
         plt.title("Edges of the predicted masks")
         plt.show()
 
@@ -102,26 +129,48 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
     horz_lines = horz_hough_lines(edges, 400, 2)
     vert_lines = vert_hough_lines(edges, 600, 2)
     lines = horz_lines + vert_lines
+    if show:
+        edges_cp_1 = np.copy(edges)*0
+        cells = draw_hough_lines(edges_cp_1, lines)
+        cells = cv2.bitwise_not(cells)
+        cells = cv2.erode(cells, (5, 5))
+        plt.imshow(cells)
+        # cv2.imwrite("hough_lines_raw.jpg", cells)
+        plt.title("Edges of the predicted masks")
+        plt.show()
     lines = merge_similar_hough_lines(lines, 50, 0.5)
     lines = merge_similar_hough_lines(lines, 50, 0.5)
     cells = draw_hough_lines(edges_cp, lines)
     cells = cv2.bitwise_not(cells)
     cells = cv2.erode(cells, (5, 5))
     if show:
+        # cv2.imwrite("hough_lines_merged.jpg", cells)
         plt.imshow(cells)
         plt.title("Hough lines for cells")
         plt.show()
+
+    if show:
+        cropped_cp_down = cv2.pyrDown(cropped_cp)
+        cropped_cp_down = cv2.cvtColor(cropped_cp_down, cv2.COLOR_GRAY2BGR)
+        cropped_cp_down = draw_hough_lines(cropped_cp_down, lines, (0, 0, 255))
+        # cv2.imwrite("hough_lines_on_module.jpg", cropped_cp_down)
+        plt.imshow(cropped_cp_down)
+        plt.title("Hough lines for cells")
+        plt.show()
+
     cells = cv2.pyrUp(cells)
     cells = cv2.pyrUp(cells)
 
     panel_images = []
     panel_contours, _ = cv2.findContours(
         cells, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    panel_contours = width_and_height_filter(panel_contours, 325, 325, 0.2)
+    panel_contours = width_and_height_filter(panel_contours, 400, 330, 0.2)
     if show:
         cropped_cp = np.copy(cropped_image)
+        cropped_cp = cv2.cvtColor(cropped_cp, cv2.COLOR_GRAY2BGR)
         cropped_cp = cv2.drawContours(
-            cropped_cp, panel_contours, -1, (255, 255, 255), 10)
+            cropped_cp, panel_contours, -1, (0, 0, 255), 10)
+        # cv2.imwrite("final_Cells.jpg", cropped_cp)
         plt.imshow(cropped_cp)
         plt.title("Outined cells on original image")
         plt.show()
@@ -192,13 +241,18 @@ def order_points(points):
     return np.float32([points[topleft_index], points[topright_index], points[bottomright_index], points[bottomleft_index]])
 
 
-def find_pv_module(image: np.ndarray) -> np.ndarray:
+def find_pv_module(image: np.ndarray, show: bool = False) -> np.ndarray:
     image_cp = np.copy(image)
     image_cp = cv2.blur(image_cp, (5, 5))
     avg_intensity = int(cv2.mean(image)[0])
 
     _, thresh = cv2.threshold(image_cp, int(
         avg_intensity), 255, cv2.THRESH_BINARY)
+    if show:
+        plt.imshow(thresh)
+        # cv2.imwrite("thresh.jpg", thresh)
+        plt.title("Global threshold of the module")
+        plt.show()
 
     kernel = np.ones((100, 100), np.uint8)
     dilated = cv2.dilate(thresh, kernel, iterations=1)
@@ -207,6 +261,16 @@ def find_pv_module(image: np.ndarray) -> np.ndarray:
         dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     rect = largest_rectangle(contours)
+    if show:
+        image_bgr = cv2.cvtColor(image_cp, cv2.COLOR_GRAY2BGR)
+        image_bgr = cv2.drawContours(image_bgr, [rect], -1, (0, 0, 255), 50)
+        # cv2.imwrite("largest_rectangle.jpg", image_bgr)
+        plt.imshow(image_bgr)
+        plt.title("Largest Rectangle")
+        plt.xticks([])
+        plt.yticks([])
+        plt.show()
+
     _, _, w, h = cv2.boundingRect(rect)
     rect = rect.flatten()
     rect = rect.reshape((4, 2))
@@ -350,7 +414,7 @@ def vert_hough_lines(edges, votes, pixels):
     return good_lines
 
 
-def draw_hough_lines(image, hough_lines):
+def draw_hough_lines(image, hough_lines, colour=(255, 255, 255)):
     # Loop over the detected lines
     for line in hough_lines:
         rho, theta = line[0]
@@ -362,7 +426,7 @@ def draw_hough_lines(image, hough_lines):
         y1 = int(y0 + 1200 * (a))
         x2 = int(x0 - 1200 * (-b))
         y2 = int(y0 - 1200 * (a))
-        cv2.line(image, (x1, y1), (x2, y2), (255, 255, 255), 2)
+        cv2.line(image, (x1, y1), (x2, y2), colour, 2)
     return image
 
 
@@ -424,10 +488,10 @@ def merge_similar_hough_lines(lines, rho_threshold, theta_threshold):
 def width_and_height_filter(contours, width, height, tolerance):
     good_contours = []
     for contour in contours:
-        _, _, w, h = cv2.boundingRect(contour)
+        x, y, w, h = cv2.boundingRect(contour)
         if w < width*(1-tolerance) or w > width * (1+tolerance):
             continue
-        if h < height*(1-tolerance) or w > height * (1+tolerance):
+        if h < height*(1-tolerance) or h > height * (1+tolerance):
             continue
         good_contours.append(contour)
     return good_contours

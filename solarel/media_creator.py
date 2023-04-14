@@ -73,14 +73,28 @@ def mask_jig_saw(model_path: str, folder_paths: list, toml_path: str, show: bool
     out.release()
 
 
+def rotate_image(image: np.ndarray, angle: float, scale: float):
+    (h, w) = image.shape[:2]
+    center = (w / 2, h / 2)
+    M = cv2.getRotationMatrix2D(center, angle, scale)
+    return cv2.warpAffine(image, M, (w, h))
+
+
 if __name__ == '__main__':
     model_path = "C:/Users/chuck/OneDrive/Desktop/Honors/models/resnet_backbone_512.hdf5"
     folders = ["C:/Users/chuck/OneDrive/Desktop/Honors/M0060/M0060",
                "C:/Users/chuck/OneDrive/Desktop/Honors/BT1/BT1"]
     toml_path = "C:/Users/chuck/OneDrive/Desktop/Honors/solarEL/solarel/configs/camera_config.toml"
 
-    start = time.time()
-    mask_jig_saw(model_path=model_path, folder_paths=folders,
-                 toml_path=toml_path, show=True)
-    end = time.time()
-    print(end - start)
+    # image = random_image(folders)
+    # image = fix_barrel_distortion(image, toml_path)
+    # rot = rotate_image(image, 10, 0.95)
+    # print(rot.shape)
+    # plt.imshow(rot)
+    # plt.show()
+    # cv2.imwrite("rotated.jpg", rot)
+    # cv2.imshow("test", rot)
+    # cv2.waitKey(0)
+
+    # mask_jig_saw(model_path=model_path, folder_paths=folders,
+    #              toml_path=toml_path, show=True)
