@@ -8,37 +8,44 @@ from typing import cast, Optional
 import os
 import tensorflow as tf
 import random
+
 os.environ["SM_FRAMEWORK"] = "tf.keras"
 
 
-def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False):
-    model = load_model(model_path, compile=False)
-    model.compile()
+def split_module_to_cells(
+    model_path_module: str,
+    model_path_cells: str,
+    folder_paths: list,
+    toml_path: str,
+    show: bool = False,
+):
+    model_cells = load_model(model_path_cells, compile=False)
+    model_cells.compile()
 
     image = random_image(folder_paths)
     # # test rotation, comment distortion fix
-    image = cv2.imread("rotated.jpg")
+    # image = cv2.imread("rotated.jpg")
     if image is None:
         return
     if show:
         plt.imshow(image)
-        plt.title('Raw Image')
+        plt.title("Raw Image")
         plt.show()
-    # image = fix_barrel_distortion(image, toml_path)
+    image = fix_barrel_distortion(image, toml_path)
     if show:
         plt.imshow(image)
-        plt.title('Barrel distortion fix')
+        plt.title("Barrel distortion fix")
         plt.show()
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    cropped_image = find_pv_module(image, show=True)
+    cropped_image = find_pv_module(image, model_path_module, show=True)
+    cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_RGB2GRAY)
     if show:
         cropped_image_bgr = np.copy(cropped_image)
         # cropped_image_bgr = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
         print(cropped_image_bgr.shape)
         # cv2.imwrite("cropped_image_bgr.jpg", cropped_image_bgr)
         plt.imshow(cropped_image_bgr)
-        plt.title('Cropped image to PV module')
+        plt.title("Cropped image to PV module")
         plt.xticks([])
         plt.yticks([])
         plt.show()
@@ -47,8 +54,8 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
     cropped_cp = cv2.pyrDown(cropped_cp)
     og_height, og_width = np.shape(cropped_cp)
     height, width = np.shape(cropped_cp)
-    horz_splits = int(np.ceil(width/512)+1)
-    vert_splits = int(np.ceil(height/512)+1)
+    horz_splits = int(np.ceil(width / 512) + 0.2)
+    vert_splits = int(np.ceil(height / 512) + 0.2)
 
     row_images = split_image_into_rows(cropped_cp, vert_splits, (512, 512))
     if show:
@@ -59,7 +66,7 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
 
     images = []
     for row in row_images:
-        images.append(split_row_image(row, horz_splits+1, (512, 512)))
+        images.append(split_row_image(row, horz_splits + 1, (512, 512)))
     if show:
         plt.imshow(images[0][0]["image"])
         # cv2.imwrite("image_0.jpg", images[0][0]["image"])
@@ -73,8 +80,8 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
             temp = image["image"]
             temp = cv2.merge((temp, temp, temp))
             temp = np.expand_dims(temp, 0)
-            prediction = (model.predict(temp))
-            predicted_img = np.argmax(prediction, axis=3)[0, :, :]*255
+            prediction = model_cells.predict(temp)
+            predicted_img = np.argmax(prediction, axis=3)[0, :, :] * 255
             predicted_img = predicted_img.astype(np.uint8)
             predicted_img = cv2.erode(predicted_img, (20, 20))
             image["image"] = predicted_img
@@ -107,7 +114,7 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
     for i, mask in enumerate(masks):
         final_mask = cv2.bitwise_or(final_mask, mask)
         if i < 3 and show:
-            # cv2.imwrite(f"final_mask_{i}.jpg", final_mask)
+            cv2.imwrite(f"final_mask_{i}.jpg", final_mask)
     if show:
         plt.imshow(final_mask)
         # cv2.imwrite("final_mask_.jpg", final_mask)
@@ -125,12 +132,12 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
         plt.title("Edges of the predicted masks")
         plt.show()
 
-    edges_cp = np.copy(edges)*0
+    edges_cp = np.copy(edges) * 0
     horz_lines = horz_hough_lines(edges, 400, 2)
     vert_lines = vert_hough_lines(edges, 600, 2)
     lines = horz_lines + vert_lines
     if show:
-        edges_cp_1 = np.copy(edges)*0
+        edges_cp_1 = np.copy(edges) * 0
         cells = draw_hough_lines(edges_cp_1, lines)
         cells = cv2.bitwise_not(cells)
         cells = cv2.erode(cells, (5, 5))
@@ -162,16 +169,14 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
     cells = cv2.pyrUp(cells)
 
     panel_images = []
-    panel_contours, _ = cv2.findContours(
-        cells, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    panel_contours, _ = cv2.findContours(cells, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     panel_contours = width_and_height_filter(panel_contours, 400, 330, 0.2)
     if show:
-        cropped_cp = np.copy(cropped_image)
-        cropped_cp = cv2.cvtColor(cropped_cp, cv2.COLOR_GRAY2BGR)
-        cropped_cp = cv2.drawContours(
-            cropped_cp, panel_contours, -1, (0, 0, 255), 10)
+        cropped_cp_ = np.copy(cropped_image)
+        cropped_cp_ = cv2.cvtColor(cropped_cp, cv2.COLOR_GRAY2BGR)
+        cropped_cp_ = cv2.drawContours(cropped_cp, panel_contours, -1, (0, 0, 255), 10)
         # cv2.imwrite("final_Cells.jpg", cropped_cp)
-        plt.imshow(cropped_cp)
+        plt.imshow(cropped_cp_)
         plt.title("Outined cells on original image")
         plt.show()
 
@@ -185,9 +190,11 @@ def main(model_path: str, folder_paths: list, toml_path: str, show: bool = False
             x, y, w, h = cv2.boundingRect(contour)
             print(x, y, w, h)
             delta = 0
-            panel_image = cropped_image[max(
-                0, y-delta):min(y+h+delta, height), max(0, x-delta):min(x+w+delta, width)]
-            label_image(panel_image, f'{i}')
+            panel_image = cropped_image[
+                max(0, y - delta) : min(y + h + delta, height),
+                max(0, x - delta) : min(x + w + delta, width),
+            ]
+            label_image(panel_image, f"{i}")
             panel_images.append(panel_image)
             panel_image_rows[-1].append(panel_image)
             i += 1
@@ -205,26 +212,6 @@ def random_image(folders: list) -> Optional[np.ndarray]:
         return cv2.imread(random.choice(files))
 
 
-def largest_rectangle(contours: np.ndarray) -> np.ndarray:
-    # Approximate contours to polygons and find the largest rectangle
-    largest_rect = None
-    max_area = 0
-    for cnt in contours:
-        # Approximate the contour to a polygon
-        poly = cv2.approxPolyDP(cnt, 0.03*cv2.arcLength(cnt, True), True)
-        # If the polygon has 4 vertices (is a rectangle)
-        if len(poly) == 4:
-            # Calculate the area of the polygon
-            area = cv2.contourArea(poly)
-            # If the area is larger than the current maximum
-            if area > max_area:
-                # Update the maximum area and largest rectangle
-                max_area = area
-                largest_rect = poly
-    # Return the largest rectangle
-    return cast(np.ndarray, largest_rect)
-
-
 def order_points(points):
     # Compute the sums and differences of the x and y coordinates
     sums = [p[0] + p[1] for p in points]
@@ -235,87 +222,127 @@ def order_points(points):
     # Find the indices of the points with the smallest and largest differences
     topright_index = np.argmin(diffs)
     bottomleft_index = np.argmax(diffs)
-    # type: ignore
-    # type: ignore
-    # type: ignore
-    return np.float32([points[topleft_index], points[topright_index], points[bottomright_index], points[bottomleft_index]])
+    return np.float32(
+        [
+            points[topleft_index],
+            points[topright_index],
+            points[bottomright_index],
+            points[bottomleft_index],
+        ]
+    )
 
 
-def find_pv_module(image: np.ndarray, show: bool = False) -> np.ndarray:
-    image_cp = np.copy(image)
-    image_cp = cv2.blur(image_cp, (5, 5))
-    avg_intensity = int(cv2.mean(image)[0])
+def make_image_square(image):
+    height, width, _ = image.shape
+    if height == width:
+        return image  # Already square
+    elif height > width:
+        new_width = height
+        new_image = np.zeros((new_width, new_width, 3), np.uint8)
+        offset = (new_width - width) // 2
+        new_image[:, offset : offset + width, :] = image
+    else:
+        new_height = width
+        new_image = np.zeros((new_height, new_height, 3), np.uint8)
+        offset = (new_height - height) // 2
+        new_image[offset : offset + height, :, :] = image
+    return new_image
 
-    _, thresh = cv2.threshold(image_cp, int(
-        avg_intensity), 255, cv2.THRESH_BINARY)
+
+def find_pv_module(
+    image: np.ndarray, model_path_module: str, show: bool = False
+) -> np.ndarray:
+    model_module = load_model(model_path_module, compile=False)
+    model_module.compile()
+
+    image_square = make_image_square(image)
+    image_square_og = np.copy(image_square)
+    og_width, og_height, _ = np.shape(image_square)
+    image_square = cv2.resize(image_square, (256, 256), interpolation=cv2.INTER_AREA)
+
     if show:
-        plt.imshow(thresh)
-        # cv2.imwrite("thresh.jpg", thresh)
-        plt.title("Global threshold of the module")
+        plt.imshow(image_square)
+        # cv2.imwrite("image_square.jpg", thresh)
+        plt.title("Square image")
         plt.show()
 
-    kernel = np.ones((100, 100), np.uint8)
-    dilated = cv2.dilate(thresh, kernel, iterations=1)
+    image_square = np.expand_dims(image_square, 0)
+    prediction = model_module.predict(image_square)
+    predicted_img = np.argmax(prediction, axis=3)[0, :, :] * 255
+    predicted_img = predicted_img.astype(np.uint8)
 
-    contours, _ = cv2.findContours(
-        dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    kernel = np.ones((10, 10), np.uint8)
+    dilated = cv2.dilate(predicted_img, kernel, iterations=1)
 
-    rect = largest_rectangle(contours)
     if show:
-        image_bgr = cv2.cvtColor(image_cp, cv2.COLOR_GRAY2BGR)
-        image_bgr = cv2.drawContours(image_bgr, [rect], -1, (0, 0, 255), 50)
-        # cv2.imwrite("largest_rectangle.jpg", image_bgr)
-        plt.imshow(image_bgr)
-        plt.title("Largest Rectangle")
-        plt.xticks([])
-        plt.yticks([])
+        plt.imshow(dilated)
+        # cv2.imwrite("predicted_img.jpg", thresh)
+        plt.title("Predicted contour of module")
         plt.show()
 
-    _, _, w, h = cv2.boundingRect(rect)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    rect = largest_convex_hull_rect(contours)
     rect = rect.flatten()
     rect = rect.reshape((4, 2))
-    src_pts = order_points(rect)
-    src_pts = src_pts.astype(np.float32)
-    src_pts = cast(np.ndarray, src_pts)
+    rect = order_points(rect)
+
+    src_pts = rect.astype(np.float32)
+
+    scaled_src_points = []
+    scale_x = og_width / 256
+    scale_y = og_height / 256
+    for point in src_pts:
+        x_scaled = int(point[0] * scale_x)
+        y_scaled = int(point[1] * scale_y)
+        scaled_src_points.append((x_scaled, y_scaled))
+    scaled_src_points = np.array(scaled_src_points, np.float32)
+
+    x, y, w, h = cv2.boundingRect(scaled_src_points)
     dst_pts = np.array([[0, 0], [0, h], [w, h], [w, 0]], np.float32)
 
-    return reproject_image(image_cp, src_pts, dst_pts)
+    return reproject_image(image_square_og, scaled_src_points, dst_pts)
 
 
-def reproject_image(image: np.ndarray, src_pts: np.ndarray, dst_pts: np.ndarray) -> np.ndarray:
+def largest_convex_hull_rect(contours):
+    c = max(contours, key=cv2.contourArea)
+    # Compute the convex hull of the contour
+    hull = cv2.convexHull(c)
+    # Compute the minimum bounding rectangle of the convex hull
+    rect = cv2.minAreaRect(hull)
+    # Convert the rectangle coordinates to integers and return them
+    return cv2.boxPoints(rect).astype(np.float32)
+
+
+def reproject_image(
+    image: np.ndarray, src_pts: np.ndarray, dst_pts: np.ndarray
+) -> np.ndarray:
     M = cv2.getPerspectiveTransform(src_pts, dst_pts)
     _, _, w, h = cv2.boundingRect(dst_pts)
     return cv2.warpPerspective(image, M, (w, h))
 
 
-def split_image_into_rows(image: np.ndarray, split: int, shape: tuple[int, int]) -> list[dict]:
+def split_image_into_rows(
+    image: np.ndarray, split: int, shape: tuple[int, int]
+) -> list[dict]:
     column_images = []
     height, _ = np.shape(image)
 
-    first_image = image[0:shape[0], :]
-    row = {
-        "image": first_image,
-        "y1": 0
-    }
+    first_image = image[0 : shape[0], :]
+    row = {"image": first_image, "y1": 0}
     column_images.append(row)
 
-    vert_middle_ims_count = split-2
-    image_seperation = height//(split+1)
+    vert_middle_ims_count = split - 2
+    image_seperation = height // (split + 1)
     for i in range(vert_middle_ims_count):
-        middle_pixel = image_seperation + (i+1)*image_seperation
-        middle_image = image[middle_pixel -
-                             shape[0]//2:middle_pixel+shape[1]//2, :]
-        row = {
-            "image": middle_image,
-            "y1": middle_pixel-shape[0]//2
-        }
+        middle_pixel = image_seperation + (i + 1) * image_seperation
+        middle_image = image[
+            middle_pixel - shape[0] // 2 : middle_pixel + shape[1] // 2, :
+        ]
+        row = {"image": middle_image, "y1": middle_pixel - shape[0] // 2}
         column_images.append(row)
 
-    last_image = image[height-shape[0]:, :]
-    row = {
-        "image": last_image,
-        "y1": height-shape[0]
-    }
+    last_image = image[height - shape[0] :, :]
+    row = {"image": last_image, "y1": height - shape[0]}
     column_images.append(row)
 
     return column_images
@@ -325,41 +352,34 @@ def split_row_image(row: dict, split: int, shape: tuple[int, int]) -> list[dict]
     split_images = []
     _, width = np.shape(row["image"])
 
-    first_image = row["image"][:, 0:shape[1]]
-    image = {
-        "image": first_image,
-        "x1": 0,
-        "y1": row["y1"]
-    }
+    first_image = row["image"][:, 0 : shape[1]]
+    image = {"image": first_image, "x1": 0, "y1": row["y1"]}
     split_images.append(image)
 
-    horz_middle_ims_count = split-2
-    image_seperation = width//(split+1)
+    horz_middle_ims_count = split - 2
+    image_seperation = width // (split + 1)
     for i in range(horz_middle_ims_count):
-        middle_pixel = image_seperation + (i+1)*image_seperation
-        middle_image = row["image"][:, middle_pixel -
-                                    shape[0]//2:middle_pixel+shape[1]//2]
+        middle_pixel = image_seperation + (i + 1) * image_seperation
+        middle_image = row["image"][
+            :, middle_pixel - shape[0] // 2 : middle_pixel + shape[1] // 2
+        ]
         image = {
             "image": middle_image,
-            "x1": middle_pixel-shape[0]//2,
-            "y1": row["y1"]
+            "x1": middle_pixel - shape[0] // 2,
+            "y1": row["y1"],
         }
         split_images.append(image)
 
-    last_image = row["image"][:, width-shape[1]:]
-    image = {
-        "image": last_image,
-        "x1": width-shape[1],
-        "y1": row["y1"]
-    }
+    last_image = row["image"][:, width - shape[1] :]
+    image = {"image": last_image, "x1": width - shape[1], "y1": row["y1"]}
     split_images.append(image)
 
     return split_images
 
 
 def predict_mask(image: np.ndarray, model) -> np.ndarray:
-    prediction = (model.predict(image))
-    predicted_img = np.argmax(prediction, axis=3)[0, :, :]*255
+    prediction = model.predict(image)
+    predicted_img = np.argmax(prediction, axis=3)[0, :, :] * 255
     return cast(predicted_img, np.ndarray)
 
 
@@ -379,8 +399,8 @@ def place_image(large_image, small_image, top_left):
 def horz_hough_lines(edges, votes, pixels):
     lines = None
     while lines is None:
-        lines = cv2.HoughLines(edges, pixels, np.pi/120, votes)
-        votes = int(votes*0.95)
+        lines = cv2.HoughLines(edges, pixels, np.pi / 120, votes)
+        votes = int(votes * 0.95)
 
     good_lines = []
     # Loop over the detected lines
@@ -388,7 +408,7 @@ def horz_hough_lines(edges, votes, pixels):
         _, theta = line[0]
         a = np.cos(theta)
         b = np.sin(theta)
-        slope = - a / b if b != 0 else 100  # divide by zero saftey
+        slope = -a / b if b != 0 else 100  # divide by zero saftey
         # Check if the line is approximately horizontal
         if abs(slope) < 0.1:
             good_lines.append(line)
@@ -398,8 +418,8 @@ def horz_hough_lines(edges, votes, pixels):
 def vert_hough_lines(edges, votes, pixels):
     lines = None
     while lines is None:
-        lines = cv2.HoughLines(edges, pixels, np.pi/120, votes)
-        votes = int(votes*0.95)
+        lines = cv2.HoughLines(edges, pixels, np.pi / 120, votes)
+        votes = int(votes * 0.95)
 
     good_lines = []
     # Loop over the detected lines
@@ -407,7 +427,7 @@ def vert_hough_lines(edges, votes, pixels):
         _, theta = line[0]
         a = np.cos(theta)
         b = np.sin(theta)
-        slope = - a / b if b != 0 else 100  # divide by zero saftey
+        slope = -a / b if b != 0 else 100  # divide by zero saftey
         # Check if the line is approximately horizontal
         if abs(slope) > 50:
             good_lines.append(line)
@@ -449,7 +469,10 @@ def merge_similar_hough_lines(lines, rho_threshold, theta_threshold):
 
             rho_i, theta_i = lines[i][0]
             rho_j, theta_j = lines[j][0]
-            if abs(rho_i - rho_j) < rho_threshold and abs(theta_i - theta_j) < theta_threshold:
+            if (
+                abs(rho_i - rho_j) < rho_threshold
+                and abs(theta_i - theta_j) < theta_threshold
+            ):
                 similar_lines[i].append(j)
 
     # ordering the INDECES of the lines by how many are similar to them
@@ -457,7 +480,7 @@ def merge_similar_hough_lines(lines, rho_threshold, theta_threshold):
     indices.sort(key=lambda x: len(similar_lines[x]))
 
     # line flags is the base for the filtering
-    line_flags = len(lines)*[True]
+    line_flags = len(lines) * [True]
     for i in range(len(lines) - 1):
         # if we already disregarded the ith element in the ordered list then we don't care (we will not delete anything based on it and we will never reconsider using this line again)
         if not line_flags[indices[i]]:
@@ -471,7 +494,10 @@ def merge_similar_hough_lines(lines, rho_threshold, theta_threshold):
 
             rho_i, theta_i = lines[indices[i]][0]
             rho_j, theta_j = lines[indices[j]][0]
-            if abs(rho_i - rho_j) < rho_threshold and abs(theta_i - theta_j) < theta_threshold:
+            if (
+                abs(rho_i - rho_j) < rho_threshold
+                and abs(theta_i - theta_j) < theta_threshold
+            ):
                 # if it is similar and have not been disregarded yet then drop it now
                 line_flags[indices[j]] = False
 
@@ -489,39 +515,45 @@ def width_and_height_filter(contours, width, height, tolerance):
     good_contours = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        if w < width*(1-tolerance) or w > width * (1+tolerance):
+        if w < width * (1 - tolerance) or w > width * (1 + tolerance):
             continue
-        if h < height*(1-tolerance) or h > height * (1+tolerance):
+        if h < height * (1 - tolerance) or h > height * (1 + tolerance):
             continue
         good_contours.append(contour)
     return good_contours
 
 
-def label_image(image, text, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=2, color=(255, 255, 255), thickness=2):
+def label_image(
+    image,
+    text,
+    font=cv2.FONT_HERSHEY_SIMPLEX,
+    font_scale=2,
+    color=(255, 255, 255),
+    thickness=2,
+):
     # Get the dimensions of the image
     height, width = image.shape
 
     # Get the dimensions of the text
-    text_width, text_height = cv2.getTextSize(
-        text, font, font_scale, thickness)[0]
+    text_width, text_height = cv2.getTextSize(text, font, font_scale, thickness)[0]
 
     # Compute the position of the text
     text_x = int((width - text_width) / 2)
     text_y = int((height + text_height) / 2)
 
     # Put the text on the image
-    cv2.putText(image, text, (text_x, text_y), font,
-                font_scale, (0, 0, 0), thickness+1)
-    cv2.putText(image, text, (text_x, text_y),
-                font, font_scale, color, thickness)
+    cv2.putText(
+        image, text, (text_x, text_y), font, font_scale, (0, 0, 0), thickness + 1
+    )
+    cv2.putText(image, text, (text_x, text_y), font, font_scale, color, thickness)
 
 
 def sort_contours(contours):
     centers = []
     for contour in contours:
         M = cv2.moments(contour)
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
         centers.append((cx, cy))
 
     # Sort the contours by their x-coordinate
@@ -545,20 +577,33 @@ def sort_contours(contours):
     # Sort the contours within each row by their x-coordinate
     for i, row in enumerate(rows):
         row_sorted_indices = np.argsort(
-            [centers[sorted_indices[j]][0] for j in row_indices[i]])
+            [centers[sorted_indices[j]][0] for j in row_indices[i]]
+        )
         rows[i] = [row[j] for j in row_sorted_indices]
 
     return rows
 
 
-if __name__ == '__main__':
-    model_path = "C:/Users/chuck/OneDrive/Desktop/Honors/models/resnet_backbone_512.hdf5"
-    folders = ["C:/Users/chuck/OneDrive/Desktop/Honors/M0060/M0060",
-               "C:/Users/chuck/OneDrive/Desktop/Honors/BT1/BT1"]
+if __name__ == "__main__":
+    model_path_cells = (
+        "C:/Users/chuck/OneDrive/Desktop/Honors/models/resnet_backbone_512.hdf5"
+    )
+    model_path_module = (
+        "C:/Users/chuck/OneDrive/Desktop/Honors/models/resnet_PV_module_256.hdf5"
+    )
+    folders = [
+        "C:/Users/chuck/OneDrive/Desktop/Honors/M0060/M0060",
+        "C:/Users/chuck/OneDrive/Desktop/Honors/BT1/BT1",
+    ]
     toml_path = "C:/Users/chuck/OneDrive/Desktop/Honors/solarEL/solarel/configs/camera_config.toml"
 
     start = time.time()
-    main(model_path=model_path, folder_paths=folders,
-         toml_path=toml_path, show=True)
+    split_module_to_cells(
+        model_path_module=model_path_module,
+        model_path_cells=model_path_cells,
+        folder_paths=folders,
+        toml_path=toml_path,
+        show=True,
+    )
     end = time.time()
     print(end - start)
