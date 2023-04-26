@@ -15,34 +15,24 @@ os.environ["SM_FRAMEWORK"] = "tf.keras"
 def split_module_to_cells(
     model_path_module: str,
     model_path_cells: str,
-    folder_paths: list,
+    image: np.ndarray,
     toml_path: str,
     show: bool = False,
 ):
     model_cells = load_model(model_path_cells, compile=False)
     model_cells.compile()
 
-    image = random_image(folder_paths)
-    # # test rotation, comment distortion fix
-    # image = cv2.imread("rotated.jpg")
-    if image is None:
-        return
-    if show:
-        plt.imshow(image)
-        plt.title("Raw Image")
-        plt.show()
     image = fix_barrel_distortion(image, toml_path)
     if show:
         plt.imshow(image)
         plt.title("Barrel distortion fix")
         plt.show()
 
-    cropped_image = find_pv_module(image, model_path_module, show=True)
+    cropped_image = find_pv_module(image, model_path_module, show=show)
     cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_RGB2GRAY)
     if show:
         cropped_image_bgr = np.copy(cropped_image)
         # cropped_image_bgr = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
-        print(cropped_image_bgr.shape)
         # cv2.imwrite("cropped_image_bgr.jpg", cropped_image_bgr)
         plt.imshow(cropped_image_bgr)
         plt.title("Cropped image to PV module")
@@ -54,8 +44,8 @@ def split_module_to_cells(
     cropped_cp = cv2.pyrDown(cropped_cp)
     og_height, og_width = np.shape(cropped_cp)
     height, width = np.shape(cropped_cp)
-    horz_splits = int(np.ceil(width / 512) + 0.2)
-    vert_splits = int(np.ceil(height / 512) + 0.2)
+    horz_splits = int(np.ceil(width / 512) + 1)
+    vert_splits = int(np.ceil(height / 512) + 1)
 
     row_images = split_image_into_rows(cropped_cp, vert_splits, (512, 512))
     if show:
@@ -124,7 +114,12 @@ def split_module_to_cells(
     final_mask_cp = np.copy(final_mask)
     final_mask_cp = final_mask_cp.astype(np.uint8)
     edges = cv2.Canny(final_mask_cp, 120, 180)
-    edges = cv2.dilate(edges, (10, 10))
+    kernel_dilate = np.ones((40, 40), np.uint8)
+    kernel_erode = np.ones((35, 35), np.uint8)
+    kernel_erode_internal = np.ones((7, 7), np.uint8)
+    edges = cv2.dilate(edges, kernel_dilate)
+    edges = cv2.erode(edges, kernel_erode)
+    edges = erode_inside(edges, 0.1, kernel_erode_internal)
     edges = cv2.pyrDown(edges)
     if show:
         plt.imshow(edges)
@@ -133,8 +128,8 @@ def split_module_to_cells(
         plt.show()
 
     edges_cp = np.copy(edges) * 0
-    horz_lines = horz_hough_lines(edges, 400, 2)
-    vert_lines = vert_hough_lines(edges, 600, 2)
+    horz_lines = horz_hough_lines(edges, 500, 2)
+    vert_lines = vert_hough_lines(edges, 800, 2)
     lines = horz_lines + vert_lines
     if show:
         edges_cp_1 = np.copy(edges) * 0
@@ -143,7 +138,7 @@ def split_module_to_cells(
         cells = cv2.erode(cells, (5, 5))
         plt.imshow(cells)
         # cv2.imwrite("hough_lines_raw.jpg", cells)
-        plt.title("Edges of the predicted masks")
+        plt.title("hough_lines_raw")
         plt.show()
     lines = merge_similar_hough_lines(lines, 50, 0.5)
     lines = merge_similar_hough_lines(lines, 50, 0.5)
@@ -157,9 +152,10 @@ def split_module_to_cells(
         plt.show()
 
     if show:
-        cropped_cp_down = cv2.pyrDown(cropped_cp)
+        cropped_cp_down = np.copy(cropped_cp)
+        cropped_cp_down = cv2.pyrDown(cropped_cp_down)
         cropped_cp_down = cv2.cvtColor(cropped_cp_down, cv2.COLOR_GRAY2BGR)
-        cropped_cp_down = draw_hough_lines(cropped_cp_down, lines, (0, 0, 255))
+        cropped_cp_down = draw_hough_lines(cropped_cp_down, lines, (255, 0, 0))
         # cv2.imwrite("hough_lines_on_module.jpg", cropped_cp_down)
         plt.imshow(cropped_cp_down)
         plt.title("Hough lines for cells")
@@ -167,37 +163,66 @@ def split_module_to_cells(
 
     cells = cv2.pyrUp(cells)
     cells = cv2.pyrUp(cells)
+    print(np.shape(cells))
+    print(np.shape(cropped_image))
 
-    panel_images = []
     panel_contours, _ = cv2.findContours(cells, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    panel_contours = width_and_height_filter(panel_contours, 400, 330, 0.2)
+    panel_contours = width_and_height_filter(panel_contours, 330, 330, 0.5)
     if show:
         cropped_cp_ = np.copy(cropped_image)
-        cropped_cp_ = cv2.cvtColor(cropped_cp, cv2.COLOR_GRAY2BGR)
-        cropped_cp_ = cv2.drawContours(cropped_cp, panel_contours, -1, (0, 0, 255), 10)
+        cropped_cp_ = cv2.cvtColor(cropped_cp_, cv2.COLOR_GRAY2RGB)
+        cropped_cp_ = cv2.drawContours(cropped_cp_, panel_contours, -1, (255, 0, 0), 10)
         # cv2.imwrite("final_Cells.jpg", cropped_cp)
         plt.imshow(cropped_cp_)
         plt.title("Outined cells on original image")
         plt.show()
 
-    rows = sort_contours(panel_contours)
+    images = []
     i = 0
-    height, width = np.shape(cropped_cp)
-    panel_image_rows = []
-    for row in rows:
-        panel_image_rows.append([])
-        for contour in row:
-            x, y, w, h = cv2.boundingRect(contour)
-            print(x, y, w, h)
-            delta = 0
-            panel_image = cropped_image[
-                max(0, y - delta) : min(y + h + delta, height),
-                max(0, x - delta) : min(x + w + delta, width),
-            ]
-            label_image(panel_image, f"{i}")
-            panel_images.append(panel_image)
-            panel_image_rows[-1].append(panel_image)
-            i += 1
+
+    square_contours = []
+    for contour in panel_contours:
+        epsilon = 0.05 * cv2.arcLength(contour, True)
+        square_contours.append(cv2.approxPolyDP(contour, epsilon, True))
+
+    for contour in square_contours:
+        _, _, w, h = cv2.boundingRect(contour)
+        dest_pts = np.array([[0, 0], [0, h], [w, h], [w, 0]], np.float32)
+
+        rect = contour.flatten()
+        rect = rect.reshape((4, 2))
+        rect = order_points(rect)
+
+        src_pts = rect.astype(np.float32)
+
+        M = cv2.getPerspectiveTransform(src_pts, dest_pts)
+        # Apply the perspective transform to the image
+        images.append(cv2.warpPerspective(cropped_image, M, (w, h)))
+
+    return images
+
+    # rows = sort_contours(panel_contours)
+    # i = 0
+    # height, width = np.shape(cropped_cp)
+    # panel_image_rows = []
+    # for row in rows:
+    #     print("hi")
+    #     panel_image_rows.append([])
+    #     for contour in row:
+    #         x, y, w, h = cv2.boundingRect(contour)
+    #         delta = 0
+    #         panel_image = cropped_image[
+    #             max(0, y - delta) : min(y + h + delta, height),
+    #             max(0, x - delta) : min(x + w + delta, width),
+    #         ]
+    #         # label_image(panel_image, f"{i}")
+    #         panel_images.append(panel_image)
+    #         panel_image_rows[-1].append(panel_image)
+    #         i += 1
+    #         plt.imshow(panel_image)
+    #         plt.show()
+
+    # return panel_image_rows
 
 
 def random_image(folders: list) -> Optional[np.ndarray]:
@@ -230,6 +255,25 @@ def order_points(points):
             points[bottomleft_index],
         ]
     )
+
+
+def erode_inside(img, border_size, kernel):
+    # Get the image dimensions
+    height, width = img.shape[:2]
+
+    # Calculate the border size to be left untouched
+    border_size = int(min(height, width) * border_size)
+
+    # Create a mask for the inner region of the image
+    eroded = cv2.erode(img, kernel)
+    eroded[:border_size, :] = 255
+    eroded[height - border_size :, :] = 255
+    eroded[:, :border_size] = 255
+    eroded[:, width - border_size :] = 255
+    plt.imshow(eroded)
+    plt.show()
+
+    return cv2.bitwise_and(eroded, img)
 
 
 def make_image_square(image):
@@ -598,10 +642,18 @@ if __name__ == "__main__":
     toml_path = "C:/Users/chuck/OneDrive/Desktop/Honors/solarEL/solarel/configs/camera_config.toml"
 
     start = time.time()
+    image = random_image(folders)
+    # # test rotation, comment distortion fix
+    # image = cv2.imread("rotated.jpg")
+
+    plt.imshow(image)
+    plt.title("Raw Image")
+    plt.show()
+
     split_module_to_cells(
         model_path_module=model_path_module,
         model_path_cells=model_path_cells,
-        folder_paths=folders,
+        image=image,
         toml_path=toml_path,
         show=True,
     )
