@@ -18,17 +18,41 @@ def split_module_to_cells(
     image: np.ndarray,
     toml_path: str,
     show: bool = False,
+    coords: bool = False,
+    barrel_fix: bool = True,
+    module_crop: bool = True,
 ):
+    start = time.time()
     model_cells = load_model(model_path_cells, compile=False)
     model_cells.compile()
 
-    image = fix_barrel_distortion(image, toml_path)
+    model_module = load_model(model_path_module, compile=False)
+    model_module.compile()
+
+    end = time.time()
+    print(f"model loading {end-start}")
+
+    start_1 = time.time()
+
+    if barrel_fix:
+        start = time.time()
+        image = fix_barrel_distortion(image, toml_path)
+        end = time.time()
+        print(f"barrel distort {end-start}")
+
     if show:
         plt.imshow(image)
         plt.title("Barrel distortion fix")
         plt.show()
 
-    cropped_image = find_pv_module(image, model_path_module, show=show)
+    if module_crop:
+        start = time.time()
+        cropped_image = find_pv_module(image, model_module, show=show)
+        end = time.time()
+        print(f"module crop {end-start}")
+    else:
+        cropped_image = image
+
     cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_RGB2GRAY)
     if show:
         cropped_image_bgr = np.copy(cropped_image)
@@ -39,6 +63,8 @@ def split_module_to_cells(
         plt.xticks([])
         plt.yticks([])
         plt.show()
+
+    start = time.time()
 
     cropped_cp = np.copy(cropped_image)
     cropped_cp = cv2.pyrDown(cropped_cp)
@@ -57,11 +83,9 @@ def split_module_to_cells(
     images = []
     for row in row_images:
         images.append(split_row_image(row, horz_splits + 1, (512, 512)))
+
     if show:
         plt.imshow(images[0][0]["image"])
-        # cv2.imwrite("image_0.jpg", images[0][0]["image"])
-        # cv2.imwrite("image_1.jpg", images[0][1]["image"])
-        # cv2.imwrite("image_2.jpg", images[0][2]["image"])
         plt.title("First image from the row")
         plt.show()
 
@@ -75,6 +99,7 @@ def split_module_to_cells(
             predicted_img = predicted_img.astype(np.uint8)
             predicted_img = cv2.erode(predicted_img, (20, 20))
             image["image"] = predicted_img
+
     if show:
         plt.imshow(images[0][0]["image"])
         # cv2.imwrite("mask_0.jpg", images[0][0]["image"])
@@ -105,12 +130,17 @@ def split_module_to_cells(
         final_mask = cv2.bitwise_or(final_mask, mask)
         if i < 3 and show:
             cv2.imwrite(f"final_mask_{i}.jpg", final_mask)
+
+    end = time.time()
+    print(f"module mask {end-start}")
+
     if show:
         plt.imshow(final_mask)
         # cv2.imwrite("final_mask_.jpg", final_mask)
         plt.title("All mask predictions combined")
         plt.show()
 
+    start = time.time()
     final_mask_cp = np.copy(final_mask)
     final_mask_cp = final_mask_cp.astype(np.uint8)
     edges = cv2.Canny(final_mask_cp, 120, 180)
@@ -119,7 +149,7 @@ def split_module_to_cells(
     kernel_erode_internal = np.ones((7, 7), np.uint8)
     edges = cv2.dilate(edges, kernel_dilate)
     edges = cv2.erode(edges, kernel_erode)
-    edges = erode_inside(edges, 0.1, kernel_erode_internal)
+    edges = erode_inside(edges, 0.1, kernel_erode_internal, show)
     edges = cv2.pyrDown(edges)
     if show:
         plt.imshow(edges)
@@ -128,8 +158,8 @@ def split_module_to_cells(
         plt.show()
 
     edges_cp = np.copy(edges) * 0
-    horz_lines = horz_hough_lines(edges, 500, 2)
-    vert_lines = vert_hough_lines(edges, 800, 2)
+    horz_lines = horz_hough_lines(edges, 580, 2)
+    vert_lines = vert_hough_lines(edges, 850, 2)
     lines = horz_lines + vert_lines
     if show:
         edges_cp_1 = np.copy(edges) * 0
@@ -145,6 +175,10 @@ def split_module_to_cells(
     cells = draw_hough_lines(edges_cp, lines)
     cells = cv2.bitwise_not(cells)
     cells = cv2.erode(cells, (5, 5))
+
+    end = time.time()
+    print(f"houglines {end-start}")
+
     if show:
         # cv2.imwrite("hough_lines_merged.jpg", cells)
         plt.imshow(cells)
@@ -161,6 +195,7 @@ def split_module_to_cells(
         plt.title("Hough lines for cells")
         plt.show()
 
+    start = time.time()
     cells = cv2.pyrUp(cells)
     cells = cv2.pyrUp(cells)
     print(np.shape(cells))
@@ -178,6 +213,7 @@ def split_module_to_cells(
         plt.show()
 
     images = []
+    coord_list = []
     i = 0
 
     square_contours = []
@@ -194,35 +230,20 @@ def split_module_to_cells(
         rect = order_points(rect)
 
         src_pts = rect.astype(np.float32)
+        coord_list.append(src_pts)
 
         M = cv2.getPerspectiveTransform(src_pts, dest_pts)
         # Apply the perspective transform to the image
         images.append(cv2.warpPerspective(cropped_image, M, (w, h)))
 
+    if coords:
+        return coord_list
+
+    end = time.time()
+    print(f"image extraction {end-start}")
+
+    print(f"total_time {end-start_1}")
     return images
-
-    # rows = sort_contours(panel_contours)
-    # i = 0
-    # height, width = np.shape(cropped_cp)
-    # panel_image_rows = []
-    # for row in rows:
-    #     print("hi")
-    #     panel_image_rows.append([])
-    #     for contour in row:
-    #         x, y, w, h = cv2.boundingRect(contour)
-    #         delta = 0
-    #         panel_image = cropped_image[
-    #             max(0, y - delta) : min(y + h + delta, height),
-    #             max(0, x - delta) : min(x + w + delta, width),
-    #         ]
-    #         # label_image(panel_image, f"{i}")
-    #         panel_images.append(panel_image)
-    #         panel_image_rows[-1].append(panel_image)
-    #         i += 1
-    #         plt.imshow(panel_image)
-    #         plt.show()
-
-    # return panel_image_rows
 
 
 def random_image(folders: list) -> Optional[np.ndarray]:
@@ -257,7 +278,7 @@ def order_points(points):
     )
 
 
-def erode_inside(img, border_size, kernel):
+def erode_inside(img, border_size, kernel, show):
     # Get the image dimensions
     height, width = img.shape[:2]
 
@@ -270,8 +291,10 @@ def erode_inside(img, border_size, kernel):
     eroded[height - border_size :, :] = 255
     eroded[:, :border_size] = 255
     eroded[:, width - border_size :] = 255
-    plt.imshow(eroded)
-    plt.show()
+
+    if show:
+        plt.imshow(eroded)
+        plt.show()
 
     return cv2.bitwise_and(eroded, img)
 
@@ -293,12 +316,7 @@ def make_image_square(image):
     return new_image
 
 
-def find_pv_module(
-    image: np.ndarray, model_path_module: str, show: bool = False
-) -> np.ndarray:
-    model_module = load_model(model_path_module, compile=False)
-    model_module.compile()
-
+def find_pv_module(image: np.ndarray, model_module, show: bool = False) -> np.ndarray:
     image_square = make_image_square(image)
     image_square_og = np.copy(image_square)
     og_width, og_height, _ = np.shape(image_square)
@@ -628,6 +646,24 @@ def sort_contours(contours):
     return rows
 
 
+def create_testing_dataset(folders, save_folder, toml_path, show=False):
+    for i in range(10):
+        image = random_image(folders)
+
+        image = fix_barrel_distortion(image, toml_path)
+
+        if show:
+            plt.imshow(image)
+            plt.title("Barrel distortion fix")
+            plt.show()
+
+        cropped_image = find_pv_module(image, model_path_module, show=show)
+        new_path = f"{save_folder}/{i}.jpg"
+        cv2.imwrite(new_path, cropped_image)
+
+    return
+
+
 if __name__ == "__main__":
     model_path_cells = (
         "C:/Users/chuck/OneDrive/Desktop/Honors/models/resnet_backbone_512.hdf5"
@@ -643,6 +679,8 @@ if __name__ == "__main__":
 
     start = time.time()
     image = random_image(folders)
+    # image_path = "solarel/22503201-0715071581_8.jpg"
+    # image = cv2.imread(image_path)
     # # test rotation, comment distortion fix
     # image = cv2.imread("rotated.jpg")
 
@@ -655,7 +693,10 @@ if __name__ == "__main__":
         model_path_cells=model_path_cells,
         image=image,
         toml_path=toml_path,
-        show=True,
+        show=False,
     )
     end = time.time()
     print(end - start)
+
+    # save_folder = "C:/Users/chuck/OneDrive/Desktop/Honors/solarEL/solarel/Cell_Segmentation.ipynb/images"
+    # create_testing_dataset(folders, save_folder, toml_path, show=False)
