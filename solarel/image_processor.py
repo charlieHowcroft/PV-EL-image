@@ -21,6 +21,7 @@ def split_module_to_cells(
     coords: bool = False,
     barrel_fix: bool = True,
     module_crop: bool = True,
+    both: bool = False,
 ):
     start = time.time()
     model_cells = load_model(model_path_cells, compile=False)
@@ -236,8 +237,11 @@ def split_module_to_cells(
         # Apply the perspective transform to the image
         images.append(cv2.warpPerspective(cropped_image, M, (w, h)))
 
+    if both
+
     if coords:
         return coord_list
+
 
     end = time.time()
     print(f"image extraction {end-start}")
