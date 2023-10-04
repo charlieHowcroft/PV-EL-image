@@ -237,11 +237,11 @@ def split_module_to_cells(
         # Apply the perspective transform to the image
         images.append(cv2.warpPerspective(cropped_image, M, (w, h)))
 
-    if both
+    if both:
+        return (cropped_image, images, coord_list)
 
     if coords:
         return coord_list
-
 
     end = time.time()
     print(f"image extraction {end-start}")
@@ -666,6 +666,24 @@ def create_testing_dataset(folders, save_folder, toml_path, show=False):
         cv2.imwrite(new_path, cropped_image)
 
     return
+
+
+def pre_process_image(image, size):
+    img = cv2.resize(image, size)
+    return np.array(img) / 256
+
+
+def predict_image(model, image):
+    pred = model.predict(np.expand_dims(image, axis=0))[0]
+    return np.argmax(pred)
+
+
+def fill_poly_with_color(image, square_coordinates, color, alpha):
+    square_coordinates = np.array(square_coordinates, dtype=np.int32)
+    output_image = image.copy()
+    mask = np.zeros_like(output_image)
+    cv2.fillPoly(mask, [square_coordinates], color, int(255 * alpha))
+    return cv2.addWeighted(output_image, 1, mask, 1, 0)
 
 
 if __name__ == "__main__":
