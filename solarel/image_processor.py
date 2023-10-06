@@ -686,6 +686,23 @@ def fill_poly_with_color(image, square_coordinates, color, alpha):
     return cv2.addWeighted(output_image, 1, mask, 1, 0)
 
 
+def draw_poly_outline(image, square_coordinates, color, thickness):
+    # Convert square_coordinates to integer
+    square_coordinates = np.array(square_coordinates, dtype=np.int32)
+
+    # Draw the polygon outline
+    output_image = image.copy()
+    cv2.polylines(
+        output_image,
+        [square_coordinates],
+        isClosed=True,
+        color=color,
+        thickness=thickness,
+    )
+
+    return output_image
+
+
 if __name__ == "__main__":
     model_path_cells = (
         "C:/Users/chuck/OneDrive/Desktop/Honors/models/resnet_backbone_512.hdf5"
